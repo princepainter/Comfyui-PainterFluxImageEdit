@@ -1,6 +1,8 @@
+<img width="2789" height="1266" alt="A%GJ96GX_9NJF5)HJZF9CN6" src="https://github.com/user-attachments/assets/b15e6d4c-b3b3-4162-885d-3c834d59c564" />
+
 ### README.md
 
-```markdown
+
 # ComfyUI-PainterFluxImageEdit
 
 Flux2 文生图 & 图生图编辑一体化节点
