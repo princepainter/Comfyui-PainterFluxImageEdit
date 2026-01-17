@@ -34,18 +34,16 @@ class PainterFluxImageEdit:
         vl_images = []
         noise_mask = None
         
-        # 处理输入图片
         images = [image1, image2, image3]
         image_prompt_prefix = ""
         has_images = any(img is not None for img in images)
         
-        # 确保文生图模式下也有 VAE
-        if not has_images and vae is None:
-            raise RuntimeError("VAE is required for text-to-image mode. Please connect a VAE loader.")
+        if vae is None:
+            raise RuntimeError("VAE is required. Please connect a VAE loader.")
         
         for i, image in enumerate(images):
             if image is not None:
-                samples = image.movedim(-1, 1)
+                samples = image.movedim(-1, 1)  # (B, C, H, W)
                 current_total = samples.shape[3] * samples.shape[2]
                 
                 # VL processing for CLIP vision (384x384)
@@ -55,57 +53,49 @@ class PainterFluxImageEdit:
                 vl_height = round(samples.shape[2] * vl_scale_by)
                 
                 s_vl = comfy.utils.common_upscale(samples, vl_width, vl_height, "area", "center")
-                vl_image = s_vl.movedim(1, -1)
+                vl_image = s_vl.movedim(1, -1)  # (B, H, W, C) for CLIP
                 vl_images.append(vl_image)
                 
                 image_prompt_prefix += f"image{i+1}: <|vision_start|><|image_pad|><|vision_end|> "
                 
+                # **Fix: Create VAE input in correct format (B, H, W, C)**
+                # VAE expects channels-last format
+                vae_input_canvas = torch.zeros(
+                    (samples.shape[0], height, width, 3),
+                    dtype=samples.dtype,
+                    device=samples.device
+                )
+                
+                # Resize image to target size
+                resized_img = comfy.utils.common_upscale(samples, width, height, "lanczos", "center")
+                resized_img = resized_img.movedim(1, -1)  # Convert to (B, H, W, C)
+                
+                # Copy to canvas (handles pad/crop automatically)
+                img_h, img_w = resized_img.shape[1], resized_img.shape[2]
+                vae_input_canvas[:, :img_h, :img_w, :] = resized_img
+                
                 # Encode to latent
-                if vae is not None:
-                    ori_longest_edge = max(samples.shape[2], samples.shape[3])
-                    target_longest_edge = max(width, height)
-                    scale_by = ori_longest_edge / target_longest_edge
+                ref_latent = vae.encode(vae_input_canvas)
+                ref_latents.append(ref_latent)
+                
+                # Process mask for image1 if provided
+                if i == 0 and image1_mask is not None:
+                    mask = image1_mask
+                    # Fix mask dimensions to [B, 1, H, W]
+                    if mask.dim() == 2:
+                        mask_samples = mask.unsqueeze(0).unsqueeze(0)
+                    elif mask.dim() == 3:
+                        mask_samples = mask.unsqueeze(1)
+                    else:
+                        print(f"Warning: Unexpected mask shape {mask.shape}, skipping mask processing")
+                        mask_samples = None
                     
-                    scaled_width = int(round(samples.shape[3] / scale_by))
-                    scaled_height = int(round(samples.shape[2] / scale_by))
-                    
-                    vae_width = round(scaled_width / 8.0) * 8
-                    vae_height = round(scaled_height / 8.0) * 8
-                    
-                    canvas_width = math.ceil(vae_width / 8.0) * 8
-                    canvas_height = math.ceil(vae_height / 8.0) * 8
-                    
-                    canvas = torch.zeros(
-                        (samples.shape[0], samples.shape[1], canvas_height, canvas_width),
-                        dtype=samples.dtype,
-                        device=samples.device
-                    )
-                    
-                    resized_samples = comfy.utils.common_upscale(samples, vae_width, vae_height, "lanczos", "center")
-                    resized_width = resized_samples.shape[3]
-                    resized_height = resized_samples.shape[2]
-                    canvas[:, :, :resized_height, :resized_width] = resized_samples
-                    
-                    image_for_vae = canvas.movedim(1, -1)
-                    ref_latent = vae.encode(image_for_vae[:, :, :, :3])
-                    ref_latents.append(ref_latent)
-                    
-                    # Process mask for image1
-                    if i == 0 and image1_mask is not None:
-                        mask = image1_mask
-                        if mask.dim() == 2:
-                            mask_samples = mask.unsqueeze(0).unsqueeze(0)
-                        elif mask.dim() == 3:
-                            mask_samples = mask.unsqueeze(1)
-                        else:
-                            print(f"Warning: Unexpected mask shape {mask.shape}, skipping mask processing")
-                            mask_samples = None
-                        
-                        if mask_samples is not None:
-                            latent_width = canvas_width // 8
-                            latent_height = canvas_height // 8
-                            resized_mask = comfy.utils.common_upscale(mask_samples, latent_width, latent_height, "area", "center")
-                            noise_mask = resized_mask.squeeze(1)
+                    if mask_samples is not None:
+                        # Resize mask to match latent spatial dimensions
+                        latent_width = width // 8
+                        latent_height = height // 8
+                        resized_mask = comfy.utils.common_upscale(mask_samples, latent_width, latent_height, "area", "center")
+                        noise_mask = resized_mask.squeeze(1)
         
         # Combine prompt
         full_prompt = image_prompt_prefix + prompt
@@ -123,10 +113,9 @@ class PainterFluxImageEdit:
         if len(ref_latents) > 0:
             negative_conditioning = node_helpers.conditioning_set_values(negative_conditioning, {"reference_latents": ref_latents}, append=True)
         
-        # **关键修复**：使用VAE创建空latent，确保尺寸一致
+        # Create empty latent
         device = comfy.model_management.get_torch_device()
         dummy_pixels = torch.zeros(1, height, width, 3, device=device)
-        # VAE编码时会自动处理尺寸和通道
         empty_latent = vae.encode(dummy_pixels)
         
         latent = {"samples": empty_latent}
