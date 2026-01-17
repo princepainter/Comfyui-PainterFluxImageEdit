@@ -1,3 +1,9 @@
+### ComfyUI-PainterFluxImageEdit
+
+
+## Flux2 文生图 & 图生图编辑一体化节点，适合9B，4B的FLUX2文生图and图片编辑工作流。
+
+
 ###  文生图：
 <img width="2138" height="889" alt="image" src="https://github.com/user-attachments/assets/0c1fbfcf-4deb-4ff1-8f3e-55d714fe0dd1" />
 
@@ -7,12 +13,7 @@
 ###  多图编辑：
 <img width="2789" height="1266" alt="A%GJ96GX_9NJF5)HJZF9CN6" src="https://github.com/user-attachments/assets/b15e6d4c-b3b3-4162-885d-3c834d59c564" />
 
-### README.md
 
-
-# ComfyUI-PainterFluxImageEdit
-
-Flux2 文生图 & 图生图编辑一体化节点
 
 ## 功能特点
 
