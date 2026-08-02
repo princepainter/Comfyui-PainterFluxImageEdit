@@ -1,6 +1,5 @@
 import node_helpers
 import comfy.utils
-import math
 import torch
 import comfy.model_management
 
@@ -53,41 +52,26 @@ class PainterFluxImageEdit:
         images = [img for i, img in enumerate(all_images[:count]) if img is not None]
         
         ref_latents = []
-        vl_images = []
         noise_mask = None
-        
-        image_prompt_prefix = ""
-        
+
         for i, image in enumerate(images):
             samples = image.movedim(-1, 1)
-            current_total = samples.shape[3] * samples.shape[2]
-            
-            vl_total = int(384 * 384)
-            vl_scale_by = math.sqrt(vl_total / current_total)
-            vl_width = round(samples.shape[3] * vl_scale_by)
-            vl_height = round(samples.shape[2] * vl_scale_by)
-            
-            s_vl = comfy.utils.common_upscale(samples, vl_width, vl_height, "area", "center")
-            vl_image = s_vl.movedim(1, -1)
-            vl_images.append(vl_image)
-            
-            image_prompt_prefix += f"image{i+1}: <|vision_start|><|image_pad|><|vision_end|> "
-            
+
             vae_input_canvas = torch.zeros(
                 (samples.shape[0], height, width, 3),
                 dtype=samples.dtype,
                 device=samples.device
             )
-            
+
             resized_img = comfy.utils.common_upscale(samples, width, height, "lanczos", "center")
             resized_img = resized_img.movedim(1, -1)
-            
+
             img_h, img_w = resized_img.shape[1], resized_img.shape[2]
             vae_input_canvas[:, :img_h, :img_w, :] = resized_img
-            
+
             ref_latent = vae.encode(vae_input_canvas)
             ref_latents.append(ref_latent)
-            
+
             if i == 0 and image1_mask is not None:
                 mask = image1_mask
                 if mask.dim() == 2:
@@ -96,16 +80,20 @@ class PainterFluxImageEdit:
                     mask_samples = mask.unsqueeze(1)
                 else:
                     mask_samples = None
-                
+
                 if mask_samples is not None:
-                    latent_width = width // 8
-                    latent_height = height // 8
-                    m = comfy.utils.common_upscale(mask_samples, latent_width, latent_height, "area", "center")
+                    # Use actual latent spatial dims — FLUX.2 [klein] uses a 16x VAE,
+                    # not 8x. Hardcoding width//8 produces a mask 2x too large, causing
+                    # misaligned inpainting boundaries.
+                    latent_height = ref_latent.shape[2]
+                    latent_width = ref_latent.shape[3]
+                    m = comfy.utils.common_upscale(mask_samples.float(), latent_width, latent_height, "area", "center")
                     noise_mask = m.squeeze(1)
-        
-        full_prompt = image_prompt_prefix + prompt
-        
-        tokens = clip.tokenize(full_prompt, images=vl_images)
+
+        # FLUX.2 [klein] uses KleinTokenizer which ignores the images= parameter entirely.
+        # Prepending vision tokens to the prompt adds literal token strings to the text
+        # without any visual grounding effect.
+        tokens = clip.tokenize(prompt)
         positive_conditioning = clip.encode_from_tokens_scheduled(tokens)
         
         if len(ref_latents) > 0:
